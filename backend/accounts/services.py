@@ -7,6 +7,7 @@ el buzón. No autentica (no crea sesión), solo flipa email_verified.
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
+from django.utils import timezone
 
 from .tokens import (
     BadSignature,
@@ -191,3 +192,59 @@ def change_pending_email(token: str, new_email: str):
     user.save(update_fields=["email", "email_verified", "is_active", "updated_at"])
     new_token, link = request_verification(user)
     return user, new_token, link
+
+
+# --- Sesiones (feature/auth-session-security) ---
+
+SESSION_KEY = "_auth_user_id"
+
+
+def _decode_session(session) -> str | None:
+    try:
+        return str(session.get_decoded().get(SESSION_KEY))
+    except Exception:
+        return None
+
+
+def active_session_keys(user, exclude_key: str | None = None) -> list[str]:
+    """Keys de sesiones vivas del usuario (para matriz PC/celular/tablet)."""
+    from django.contrib.sessions.models import Session
+
+    keys = []
+    for s in Session.objects.filter(expire_date__gt=timezone.now()):
+        if _decode_session(s) == str(user.pk) and s.session_key != exclude_key:
+            keys.append(s.session_key)
+    return keys
+
+
+def keep_only_current_session(request) -> int:
+    """Cierra TODAS las sesiones del usuario excepto la actual.
+
+    Decisión: el cierre global excluye la invocante (no te expulsa).
+    Devuelve cuántas cerró.
+    """
+    from django.contrib.sessions.models import Session
+
+    current = request.session.session_key
+    doomed = active_session_keys(request.user, exclude_key=current)
+    if doomed:
+        Session.objects.filter(session_key__in=doomed).delete()
+    return len(doomed)
+
+
+def rotate_on_password_change(request, user) -> None:
+    """Política tras cambiar contraseña: actual viva, demás muertas.
+
+    Decisión: cerrar las demás. `update_session_auth_hash` rota el hash
+    en la sesión actual (la mantiene) e invalida las demás porque el
+    session auth hash ya no coincide. Reutilizar en password-reset.
+
+    Nota Django 5.2: la función ya no persiste (`save` desapareció) y
+    solo rota el hash si `request.user == user`. Guardamos explícito
+    para no depender del middleware al final del response.
+    """
+    from django.contrib.auth import update_session_auth_hash
+
+    update_session_auth_hash(request, user)
+    request.session.save()
+    keep_only_current_session(request)
