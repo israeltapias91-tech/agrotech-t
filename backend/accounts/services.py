@@ -370,3 +370,75 @@ def revoke_all_sessions(user) -> int:
     if doomed:
         Session.objects.filter(session_key__in=doomed).delete()
     return len(doomed)
+
+
+# --- Registro (feature/auth-registration) ---
+# Fuente única de verificación: request_verification(). Sin finca,
+# sin roles, sin suscripción (eso es multi-finca, no esta feature).
+
+import re
+
+PHONE_RE = re.compile(r"^\+?[0-9\s\-()]{7,20}$")
+
+
+class RegistrationError(Exception):
+    code = "registration_error"
+
+
+class EmailInvalid(RegistrationError):
+    code = "email_invalid"
+
+
+class FieldsRequired(RegistrationError):
+    code = "fields_required"
+
+
+class PhoneInvalid(RegistrationError):
+    code = "phone_invalid"
+
+
+def register_user(first_name="", last_name="", email="", phone="",
+                  password="", password_confirm=""):
+    """Crea la cuenta sin verificar y dispara la verificación existente."""
+    from django.core.validators import validate_email as _validate_email
+
+    missing = [f for f, v in (
+        ("first_name", first_name), ("last_name", last_name),
+        ("email", email), ("password", password),
+        ("password_confirm", password_confirm),
+    ) if not (v or "").strip()]
+    if missing:
+        err = FieldsRequired(f"Faltan: {', '.join(missing)}")
+        err.messages = missing
+        raise err
+
+    User = _user_model()
+    email = User.objects.normalize_email(email.strip())
+    try:
+        _validate_email(email)
+    except DjangoValidationError as exc:
+        raise EmailInvalid("Correo inválido") from exc
+    if User.objects.filter(email__iexact=email).exists():
+        raise EmailTaken("Ese correo ya está registrado")
+    if phone and not PHONE_RE.match(phone.strip()):
+        raise PhoneInvalid("Teléfono inválido")
+    if password != password_confirm:
+        raise PasswordMismatch("Las contraseñas no coinciden")
+
+    user = User(
+        email=email,
+        first_name=first_name.strip(),
+        last_name=last_name.strip(),
+        phone=(phone or "").strip(),
+        email_verified=False,
+    )
+    try:
+        validate_password(password, user)
+    except DjangoValidationError as exc:
+        err = PasswordTooWeak("Contraseña demasiado débil")
+        err.messages = list(exc.messages)
+        raise err from exc
+    user.set_password(password)  # hash, nunca plano
+    user.save()
+    token, link = request_verification(user)  # única fuente de verdad
+    return user, token, link
