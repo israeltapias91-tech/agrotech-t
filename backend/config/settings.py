@@ -36,7 +36,8 @@ INSTALLED_APPS = [
     # Terceros FASE 3
     "rest_framework",
     "corsheaders",
-    # Apps AGROTECH (FASE 4+): accounts, farms, permissions, subscriptions...
+    # Apps AGROTECH FASE 4
+    "accounts",
 ]
 
 MIDDLEWARE = [
@@ -94,8 +95,8 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# ¡FASE 4! Descomentar solo cuando exista accounts.User (UUID + email login).
-# AUTH_USER_MODEL = "accounts.User"
+# FASE 4: modelo de identidad oficial (UUID + email login).
+AUTH_USER_MODEL = "accounts.User"
 
 LANGUAGE_CODE = "es-co"
 TIME_ZONE = "America/Bogota"
