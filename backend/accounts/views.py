@@ -11,11 +11,14 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from . import services
-from .services import EmailVerificationError, LoginError
+from .services import EmailVerificationError, LoginError, PasswordResetError
 
 
-def _error(exc: EmailVerificationError, http_status):
-    return Response({"code": exc.code, "detail": str(exc)}, status=http_status)
+def _error(exc, http_status):
+    body = {"code": exc.code, "detail": str(exc)}
+    if getattr(exc, "messages", None):
+        body["messages"] = list(exc.messages)
+    return Response(body, status=http_status)
 
 
 class EmailVerifyView(APIView):
@@ -183,5 +186,59 @@ class LogoutAllView(APIView):
         closed = services.keep_only_current_session(request)
         return Response(
             {"code": "all_closed", "detail": f"Se cerraron {closed} sesiones (actual viva)"},
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetRequestView(APIView):
+    """Siempre neutra (no enumera): mismo 200 exista o no la cuenta."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
+
+    def post(self, request):
+        email = request.data.get("email", "")
+        if not email:
+            return Response(
+                {"code": "email_required", "detail": "Email requerido"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        services.request_password_reset(email)
+        return Response(
+            {"code": "reset_sent", "detail": "Si la cuenta existe, enviamos el enlace"},
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetConfirmView(APIView):
+    """Valida token + política Django, guarda hash. Decisión A: sin sesión.
+
+    Sesiones: CASO 1 (autenticado como el dueño) -> actual viva, demás
+    muertas. CASO 2 (anónimo) -> mueren TODAS ya mismo.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        uid = request.data.get("uid", "")
+        token = request.data.get("token", "")
+        new_password = request.data.get("new_password", "")
+        confirm = request.data.get("new_password_confirm", "")
+        if not uid or not token or not new_password:
+            return Response(
+                {"code": "fields_required", "detail": "uid, token y new_password requeridos"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            user = services.confirm_password_reset(uid, token, new_password, confirm)
+        except PasswordResetError as exc:
+            return _error(exc, status.HTTP_400_BAD_REQUEST)
+        if request.user.is_authenticated and str(request.user.pk) == str(user.pk):
+            services.rotate_on_password_change(request, user)  # CASO 1
+        else:
+            services.revoke_all_sessions(user)  # CASO 2
+        return Response(
+            {"code": "password_changed", "detail": "Contraseña actualizada, inicia sesión"},
             status=status.HTTP_200_OK,
         )
