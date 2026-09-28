@@ -11,7 +11,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from . import services
-from .services import EmailVerificationError, LoginError, PasswordResetError
+from .services import EmailVerificationError, LoginError, PasswordResetError, RegistrationError
 
 
 def _error(exc, http_status):
@@ -242,3 +242,26 @@ class PasswordResetConfirmView(APIView):
             {"code": "password_changed", "detail": "Contraseña actualizada, inicia sesión"},
             status=status.HTTP_200_OK,
         )
+
+
+class RegisterView(APIView):
+    """Crea cuenta sin verificar + dispara verificación. Sin auto-login."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "registration"
+
+    def post(self, request):
+        try:
+            user, _, _ = services.register_user(
+                first_name=request.data.get("first_name", ""),
+                last_name=request.data.get("last_name", ""),
+                email=request.data.get("email", ""),
+                phone=request.data.get("phone", ""),
+                password=request.data.get("password", ""),
+                password_confirm=request.data.get("password_confirm", ""),
+            )
+        except (RegistrationError, EmailVerificationError, PasswordResetError) as exc:
+            return _error(exc, status.HTTP_400_BAD_REQUEST)
+        body = {"code": "registered", "detail": "Cuenta creada, verifica tu correo", "email": user.email}
+        return Response(body, status=status.HTTP_201_CREATED)
