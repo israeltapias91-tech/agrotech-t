@@ -145,6 +145,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "login": os.getenv("LOGIN_THROTTLE_RATE", "5/minute"),
+        "password_reset": os.getenv("PASSWORD_RESET_THROTTLE_RATE", "5/minute"),
     },
 }
 
@@ -167,3 +168,8 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotec
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
 EMAIL_VERIFICATION_SALT = os.getenv("EMAIL_VERIFICATION_SALT", "agrotech-email-verify")
 EMAIL_VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("EMAIL_VERIFICATION_TIMEOUT_SECONDS", "86400"))
+
+# --- Password reset (feature/auth-password-reset, tokens nativos Django) ---
+# Tokens: PasswordResetTokenGenerator (ligan pk + hash + login + email).
+# Expiración nativa vía PASSWORD_RESET_TIMEOUT (segundos).
+PASSWORD_RESET_TIMEOUT = int(os.getenv("PASSWORD_RESET_TIMEOUT_SECONDS", "86400"))

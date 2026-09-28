@@ -6,8 +6,15 @@ el buzón. No autentica (no crea sesión), solo flipa email_verified.
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import send_mail
 from django.utils import timezone
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import base36_to_int, urlsafe_base64_decode, urlsafe_base64_encode
+
+import datetime
 
 from .tokens import (
     BadSignature,
@@ -248,3 +255,118 @@ def rotate_on_password_change(request, user) -> None:
     update_session_auth_hash(request, user)
     request.session.save()
     keep_only_current_session(request)
+
+
+# --- Password reset (feature/auth-password-reset) ---
+# Tokens nativos Django: ligan pk + hash + last_login + email + timestamp.
+# Cambiar la clave invalida el token (reutilizar -> TokenInvalid).
+# Decisión A: tras recuperar NO se crea sesión, se re-loguea normal.
+
+
+class PasswordResetError(Exception):
+    code = "password_reset_error"
+
+
+class ResetTokenInvalid(PasswordResetError):
+    code = "token_invalid"
+
+
+class ResetTokenExpired(PasswordResetError):
+    code = "token_expired"
+
+
+class PasswordMismatch(PasswordResetError):
+    code = "password_mismatch"
+
+
+class PasswordTooWeak(PasswordResetError):
+    code = "password_too_weak"
+
+
+def _uid(user) -> str:
+    return urlsafe_base64_encode(force_bytes(str(user.pk)))
+
+
+def _user_from_uid(uid: str):
+    try:
+        pk = force_str(urlsafe_base64_decode(uid))
+        return _user_model().objects.get(pk=pk)
+    except Exception as exc:
+        raise ResetTokenInvalid("Enlace inválido o alterado") from exc
+
+
+def _check_reset_token(user, token: str) -> None:
+    """Distingue expirado de manipulado (el generador solo da False)."""
+    if default_token_generator.check_token(user, token):
+        return
+    try:
+        ts_b36, _ = token.split("-")
+        # Época del generador Django: 2001-01-01 (NO unix). Ver
+        # PasswordResetTokenGenerator._num_seconds.
+        made = datetime.datetime(2001, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(
+            seconds=base36_to_int(ts_b36)
+        )
+        age = (timezone.now() - made).total_seconds()
+        if age > int(getattr(settings, "PASSWORD_RESET_TIMEOUT", 86400)):
+            raise ResetTokenExpired("El enlace expiró, pide uno nuevo")
+    except PasswordResetError:
+        raise
+    except Exception:
+        pass
+    raise ResetTokenInvalid("Enlace inválido o alterado")
+
+
+def build_password_reset_link(uid: str, token: str) -> str:
+    base = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return f"{base}/reset-password?uid={uid}&token={token}"
+
+
+def request_password_reset(email: str):
+    """Siempre neutro: devuelve (uid, token, link) o None. No enumera."""
+    User = _user_model()
+    try:
+        user = User.objects.get(email__iexact=User.objects.normalize_email(email or ""))
+    except User.DoesNotExist:
+        return None
+    if user.account_status != User.AccountStatus.ACTIVE:
+        return None
+    uid = _uid(user)
+    token = default_token_generator.make_token(user)
+    link = build_password_reset_link(uid, token)
+    send_mail(
+        "AGROTECH — recupera tu contraseña",
+        f"Hola,\n\nRestablece tu contraseña aquí (válido "
+        f"{int(getattr(settings, 'PASSWORD_RESET_TIMEOUT', 86400)) // 3600} h):\n{link}\n\n"
+        "Si no lo pediste, ignora este mensaje.",
+        getattr(settings, "DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>"),
+        [user.email],
+        fail_silently=False,
+    )
+    return user, uid, token, link
+
+
+def confirm_password_reset(uid: str, token: str, new_password: str, confirm: str):
+    """Valida token + política Django y guarda el nuevo hash. Sin sesión (A)."""
+    user = _user_from_uid(uid)
+    _check_reset_token(user, token)
+    if not new_password or new_password != confirm:
+        raise PasswordMismatch("Las contraseñas no coinciden")
+    try:
+        validate_password(new_password, user)
+    except DjangoValidationError as exc:
+        err = PasswordTooWeak("Contraseña demasiado débil")
+        err.messages = list(exc.messages)
+        raise err from exc
+    user.set_password(new_password)
+    user.save()
+    return user
+
+
+def revoke_all_sessions(user) -> int:
+    """CASO 2 (anónimo): no hay sesión actual, mueren TODAS ya mismo."""
+    from django.contrib.sessions.models import Session
+
+    doomed = active_session_keys(user)
+    if doomed:
+        Session.objects.filter(session_key__in=doomed).delete()
+    return len(doomed)
