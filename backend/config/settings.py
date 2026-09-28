@@ -123,6 +123,8 @@ CSRF_TRUSTED_ORIGINS = _env_list(
 )
 
 # --- DRF base (permisos concretos en fase de matriz, pendiente) ---
+# Throttling: solo el login lo usa (scope 'login'). Primera capa contra
+# fuerza bruta; NO la única (falta backoff/captcha/WAF en fases posteriores).
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
@@ -130,6 +132,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "login": os.getenv("LOGIN_THROTTLE_RATE", "5/minute"),
+    },
 }
 
 # --- Negocio configurable, PENDIENTES no inventados ---
