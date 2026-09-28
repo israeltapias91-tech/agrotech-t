@@ -40,6 +40,52 @@ class EmailTaken(EmailVerificationError):
     code = "email_taken"
 
 
+class LoginError(Exception):
+    code = "login_error"
+
+
+class InvalidCredentials(LoginError):
+    code = "invalid_credentials"
+
+
+class AccountSuspended(LoginError):
+    code = "account_suspended"
+
+
+class AccountDeactivated(LoginError):
+    code = "account_deactivated"
+
+
+class EmailNotVerified(LoginError):
+    code = "email_not_verified"
+
+
+def authenticate_for_login(email: str, password: str):
+    """Puertas del login (mismas que el flujo, orden seguro Django).
+
+    Orden: credenciales (hash) -> cuenta activa -> correo verificado.
+    Se verifica la contraseña ANTES de revelar estado, para no enumerar
+    cuentas suspendidas/sin verificar con cualquier contraseña. Las
+    puertas son las mismas, solo cambia el orden de evaluación.
+    """
+    User = _user_model()
+    email = User.objects.normalize_email(email or "")
+    try:
+        user = User.objects.get(email__iexact=email)
+    except User.DoesNotExist as exc:
+        raise InvalidCredentials("Correo o contraseña inválidos") from exc
+
+    if not user.check_password(password or ""):
+        raise InvalidCredentials("Correo o contraseña inválidos")
+    if user.account_status == User.AccountStatus.SUSPENDED:
+        raise AccountSuspended("Cuenta suspendida, contacta soporte")
+    if user.account_status == User.AccountStatus.DEACTIVATED:
+        raise AccountDeactivated("Cuenta desactivada, contacta soporte")
+    if not user.email_verified:
+        raise EmailNotVerified("Debes verificar tu correo antes de entrar")
+    return user
+
+
 def _user_model():
     return get_user_model()
 
