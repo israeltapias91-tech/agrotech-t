@@ -146,6 +146,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "login": os.getenv("LOGIN_THROTTLE_RATE", "5/minute"),
         "password_reset": os.getenv("PASSWORD_RESET_THROTTLE_RATE", "5/minute"),
+        "registration": os.getenv("REGISTRATION_THROTTLE_RATE", "10/hour"),
     },
 }
 
