@@ -107,11 +107,22 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Sesiones: decisión 21 (varias sesiones + 24h, cookie Django) ---
+# feature/auth-session-security: dev vs prod vía env. En prod HTTPS:
+# SESSION_COOKIE_SECURE=True + CSRF_COOKIE_SECURE=True + SameSite=Lax.
 SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "86400"))  # 24h
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = os.getenv("SESSION_SAMESITE", "Lax")
 SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", False)  # True en prod HTTPS
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+
+# --- CSRF (feature/auth-session-security): espejo de sesión ---
+# csrftoken debe leerlo JS para el header X-CSRFToken -> HttpOnly=False.
+# Secure/SameSite iguales que la sesión para no romper React en prod.
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = os.getenv("CSRF_SAMESITE", os.getenv("SESSION_SAMESITE", "Lax"))
+CSRF_COOKIE_SECURE = _env_bool(
+    "CSRF_COOKIE_SECURE", os.getenv("SESSION_COOKIE_SECURE", "False")
+)
 
 # --- CORS/CSRF para React futuro (localhost:5173 Vite / 3000 CRA) ---
 CORS_ALLOW_CREDENTIALS = True

@@ -1,7 +1,9 @@
-"""AGROTECH accounts — verificación (pre-auth) + login/logout/sesión."""
+"""AGROTECH accounts — verificación + login/logout/sesión/CSRF."""
 
 from django.contrib.auth import login as django_login
 from django.contrib.auth import logout as django_logout
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -158,5 +160,28 @@ class SessionView(APIView):
                 "account_status": request.user.account_status,
                 "email_verified": request.user.email_verified,
             },
+            status=status.HTTP_200_OK,
+        )
+
+
+@method_decorator(ensure_csrf_cookie, name="dispatch")
+class CsrfView(APIView):
+    """Setea csrftoken para React (GET previo al login)."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({"code": "csrf_set", "detail": "CSRF cookie lista"}, status=status.HTTP_200_OK)
+
+
+class LogoutAllView(APIView):
+    """Cierra TODAS las sesiones del usuario excepto la actual."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        closed = services.keep_only_current_session(request)
+        return Response(
+            {"code": "all_closed", "detail": f"Se cerraron {closed} sesiones (actual viva)"},
             status=status.HTTP_200_OK,
         )
