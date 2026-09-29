@@ -2,6 +2,8 @@
 
 from unittest import mock
 
+import re
+
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.test import TestCase, override_settings
@@ -15,12 +17,13 @@ PW = "Secreta123!"
 NEW = "Nueva456!Segura"
 ALTA = mock.patch.dict(
     ScopedRateThrottle.THROTTLE_RATES,
-    {"login": "1000/minute", "password_reset": "1000/minute"},
+    {"login": "1000/minute", "password_reset": "1000/minute", "email_otp": "1000/minute"},
 )
 
 REQ = "/api/auth/password/request/"
 CONF = "/api/auth/password/confirm/"
 LOGIN = "/api/auth/login/"
+VERIFY = "/api/auth/otp/verify/"
 SESSION = "/api/auth/session/"
 
 
@@ -28,6 +31,15 @@ def make(email, **kw):
     kw.setdefault("password", PW)
     kw.setdefault("email_verified", True)
     return User.objects.create_user(email=email, **kw)
+
+
+def full_login(c, email="user@test.com", password=PW):
+    r = c.post(LOGIN, {"email": email, "password": password}, format="json")
+    assert r.status_code == 200, r.data
+    code = re.search(r"(\d{6})", mail.outbox[-1].body).group(1)
+    r2 = c.post(VERIFY, {"challenge_id": r.data["challenge_id"], "code": code}, format="json")
+    assert r2.status_code == 200, r2.data
+    return c
 
 
 def payload(uid, token, new=NEW, confirm=NEW):
@@ -42,6 +54,7 @@ def payload(uid, token, new=NEW, confirm=NEW):
 @ALTA
 class PasswordResetTests(TestCase):
     def setUp(self):
+        mail.outbox = []
         make("user@test.com")
 
     def _request(self, email="user@test.com"):
@@ -119,8 +132,8 @@ class PasswordResetTests(TestCase):
 
     def test_10_caso2_anonimo_revoca_todas(self):
         a, b = APIClient(), APIClient()
-        a.post(LOGIN, {"email": "user@test.com", "password": PW}, format="json")
-        b.post(LOGIN, {"email": "user@test.com", "password": PW}, format="json")
+        full_login(a)
+        full_login(b)
         _, uid, token, _ = self._request()
         r = APIClient().post(CONF, payload(uid, token), format="json")
         self.assertEqual(r.status_code, 200)
@@ -129,8 +142,8 @@ class PasswordResetTests(TestCase):
 
     def test_11_caso1_autenticado_conserva_actual(self):
         a, b = APIClient(), APIClient()
-        a.post(LOGIN, {"email": "user@test.com", "password": PW}, format="json")
-        b.post(LOGIN, {"email": "user@test.com", "password": PW}, format="json")
+        full_login(a)
+        full_login(b)
         _, uid, token, _ = self._request()
         r = a.post(CONF, payload(uid, token), format="json")
         self.assertEqual(r.status_code, 200)

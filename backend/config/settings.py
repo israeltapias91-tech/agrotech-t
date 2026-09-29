@@ -147,6 +147,7 @@ REST_FRAMEWORK = {
         "login": os.getenv("LOGIN_THROTTLE_RATE", "5/minute"),
         "password_reset": os.getenv("PASSWORD_RESET_THROTTLE_RATE", "5/minute"),
         "registration": os.getenv("REGISTRATION_THROTTLE_RATE", "10/hour"),
+        "email_otp": os.getenv("EMAIL_OTP_THROTTLE_RATE", "10/minute"),
     },
 }
 
@@ -174,3 +175,13 @@ EMAIL_VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("EMAIL_VERIFICATION_TIMEOUT_S
 # Tokens: PasswordResetTokenGenerator (ligan pk + hash + login + email).
 # Expiración nativa vía PASSWORD_RESET_TIMEOUT (segundos).
 PASSWORD_RESET_TIMEOUT = int(os.getenv("PASSWORD_RESET_TIMEOUT_SECONDS", "86400"))
+
+# --- OTP login por correo (feature/auth-email-otp) ---
+# Verificación en dos pasos pragmática. Desafío por challenge_id, hash
+# con make_password, 6 dígitos / 10 min / 5 intentos / 3 reenvíos 15 min.
+OTP_LENGTH = int(os.getenv("OTP_LENGTH", "6"))
+OTP_TIMEOUT_SECONDS = int(os.getenv("OTP_TIMEOUT_SECONDS", "600"))
+OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+OTP_RESEND_LIMIT = int(os.getenv("OTP_RESEND_LIMIT", "3"))
+OTP_RESEND_WINDOW_SECONDS = int(os.getenv("OTP_RESEND_WINDOW_SECONDS", "900"))
+OTP_RESEND_MIN_INTERVAL = int(os.getenv("OTP_RESEND_MIN_INTERVAL", "60"))
