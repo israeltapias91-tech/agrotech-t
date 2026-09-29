@@ -1,4 +1,4 @@
-"""AGROTECH accounts — verificación + login/logout/sesión."""
+"""AGROTECH accounts — verificación + login 2 fases + sesión."""
 
 from django.urls import path
 
@@ -10,6 +10,8 @@ from .views import (
     LoginView,
     LogoutAllView,
     LogoutView,
+    OtpResendView,
+    OtpVerifyView,
     PasswordResetConfirmView,
     PasswordResetRequestView,
     RegisterView,
@@ -22,6 +24,8 @@ urlpatterns = [
     path("email/resend/", EmailResendView.as_view(), name="email-resend"),
     path("email/change/", EmailChangeView.as_view(), name="email-change"),
     path("login/", LoginView.as_view(), name="login"),
+    path("otp/verify/", OtpVerifyView.as_view(), name="otp-verify"),
+    path("otp/resend/", OtpResendView.as_view(), name="otp-resend"),
     path("logout/", LogoutView.as_view(), name="logout"),
     path("logout-all/", LogoutAllView.as_view(), name="logout-all"),
     path("session/", SessionView.as_view(), name="session"),

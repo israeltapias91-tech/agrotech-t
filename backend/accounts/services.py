@@ -6,6 +6,7 @@ el buzón. No autentica (no crea sesión), solo flipa email_verified.
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -15,6 +16,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.utils.http import base36_to_int, urlsafe_base64_decode, urlsafe_base64_encode
 
 import datetime
+import secrets
 
 from .tokens import (
     BadSignature,
@@ -442,3 +444,143 @@ def register_user(first_name="", last_name="", email="", phone="",
     user.save()
     token, link = request_verification(user)  # única fuente de verdad
     return user, token, link
+
+
+# --- OTP de login por correo (feature/auth-email-otp) ---
+# Verificación en dos pasos pragmática (NO presentarla como MFA máximo:
+# NIST no avala el email como canal OOB; evolución futura TOTP/WebAuthn).
+# El OTP vive ligado a UN desafío (challenge_id) creado tras contraseña
+# válida. Sin sesión Django a medio autenticar.
+
+
+class OTPError(Exception):
+    code = "otp_error"
+
+
+class OTPInvalid(OTPError):
+    code = "otp_invalid"
+
+
+class OTPExpired(OTPError):
+    code = "otp_expired"
+
+
+class OTPAttemptsExceeded(OTPError):
+    code = "otp_attempts_exceeded"
+
+
+class OTPResendLimited(OTPError):
+    code = "otp_resend_limited"
+
+
+def _otp_cfg(name: str, default: int) -> int:
+    return int(getattr(settings, name, default))
+
+
+def _otp_model():
+    from .models import EmailOTP
+
+    return EmailOTP
+
+
+def _cleanup_otps(user) -> None:
+    """Borra retos muertos: usados o expirados.
+
+    Los invalidados (superseded) se conservan hasta expirar: cuentan
+    para el límite de reenvíos y mantienen trazabilidad.
+    """
+    from django.db.models import Q
+
+    _otp_model().objects.filter(user=user).filter(
+        Q(used_at__isnull=False) | Q(expires_at__lte=timezone.now())
+    ).delete()
+
+
+def _new_code(length: int) -> str:
+    return f"{secrets.randbelow(10 ** length):0{length}d}"
+
+
+def _send_otp_mail(user, code: str, minutes: int) -> None:
+    send_mail(
+        "AGROTECH — tu código de inicio de sesión",
+        f"Hola,\n\nTu código para iniciar sesión es:\n\n{code}\n\n"
+        f"Vence en {minutes} minutos. Si no intentaste entrar, ignora este mensaje.",
+        getattr(settings, "DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>"),
+        [user.email],
+        fail_silently=False,
+    )
+
+
+def issue_login_otp(user):
+    """Crea un desafío OTP tras contraseña válida. Invalida el anterior."""
+    OTP = _otp_model()
+    _cleanup_otps(user)
+    now = timezone.now()
+    OTP.objects.filter(user=user, used_at__isnull=True, superseded_at__isnull=True).update(
+        superseded_at=now
+    )
+    length = _otp_cfg("OTP_LENGTH", 6)
+    minutes = _otp_cfg("OTP_TIMEOUT_SECONDS", 600) // 60
+    otp = OTP.objects.create(
+        user=user,
+        code_hash=make_password(_code := _new_code(length)),
+        expires_at=now + datetime.timedelta(seconds=_otp_cfg("OTP_TIMEOUT_SECONDS", 600)),
+        max_attempts=_otp_cfg("OTP_MAX_ATTEMPTS", 5),
+    )
+    _send_otp_mail(user, _code, minutes)  # plano solo aquí, nunca en DB/logs
+    return otp
+
+
+def _get_challenge(challenge_id: str):
+    try:
+        return _otp_model().objects.select_related("user").get(challenge_id=challenge_id)
+    except Exception as exc:
+        raise OTPInvalid("Desafío inválido") from exc
+
+
+def verify_login_otp(challenge_id: str, code: str):
+    """Valida el código del desafío. OK -> marca usado y devuelve el user."""
+    otp = _get_challenge(challenge_id)
+    if otp.used_at is not None or otp.superseded_at is not None:
+        raise OTPInvalid("Código ya utilizado o reemplazado")
+    if otp.expires_at <= timezone.now():
+        raise OTPExpired("El código expiró, pide uno nuevo")
+    if otp.attempts >= otp.max_attempts:
+        raise OTPAttemptsExceeded("Demasiados intentos, pide un código nuevo")
+    if not check_password(code or "", otp.code_hash):
+        otp.attempts += 1
+        otp.save(update_fields=["attempts"])
+        remaining = otp.max_attempts - otp.attempts
+        if remaining <= 0:
+            raise OTPAttemptsExceeded("Demasiados intentos, pide un código nuevo")
+        err = OTPInvalid(f"Código incorrecto, te quedan {remaining} intentos")
+        err.remaining = remaining
+        raise err
+    otp.used_at = timezone.now()
+    otp.save(update_fields=["used_at"])
+    return otp.user
+
+
+def resend_login_otp(challenge_id: str):
+    """Nuevo OTP para el MISMO desafío de login. Invalida el anterior."""
+    otp = _get_challenge(challenge_id)
+    if otp.used_at is not None:
+        raise OTPInvalid("Este desafío ya fue usado")
+    now = timezone.now()
+    window = _otp_cfg("OTP_RESEND_WINDOW_SECONDS", 900)
+    limit = _otp_cfg("OTP_RESEND_LIMIT", 3)
+    interval = _otp_cfg("OTP_RESEND_MIN_INTERVAL", 60)
+    recent = _otp_model().objects.filter(
+        user=otp.user, created_at__gt=now - datetime.timedelta(seconds=window)
+    ).count()
+    if recent > limit:  # el inicial no consume cupo: permite `limit` reenvíos
+        raise OTPResendLimited("Límite de reenvíos, espera unos minutos")
+    last = (
+        _otp_model().objects.filter(user=otp.user)
+        .order_by("-created_at")
+        .values_list("created_at", flat=True)
+        .first()
+    )
+    if last and (now - last).total_seconds() < interval:
+        raise OTPResendLimited(f"Espera {interval} segundos antes de reenviar")
+    return issue_login_otp(otp.user)

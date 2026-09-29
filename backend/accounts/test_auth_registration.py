@@ -112,6 +112,10 @@ class RegistrationTests(TestCase):
         self.assertNotIn("password", r.data)
 
     def test_13_cadena_registro_verifica_login(self):
+        import re
+
+        from django.core import mail as _mail
+
         c = APIClient()
         c.post(REG, base(), format="json")
         token, _ = services.request_verification(User.objects.get(email="juan@test.com"))
@@ -119,4 +123,8 @@ class RegistrationTests(TestCase):
         self.assertEqual(rv.status_code, 200)
         rl = c.post(LOGIN, {"email": "juan@test.com", "password": PW}, format="json")
         self.assertEqual(rl.status_code, 200)
-        self.assertEqual(rl.data["code"], "authenticated")
+        self.assertEqual(rl.data["code"], "otp_required")  # fase 1: sin sesión aún
+        code = re.search(r"(\d{6})", _mail.outbox[-1].body).group(1)
+        ro = c.post("/api/auth/otp/verify/", {"challenge_id": rl.data["challenge_id"], "code": code}, format="json")
+        self.assertEqual(ro.status_code, 200)
+        self.assertEqual(ro.data["code"], "authenticated")

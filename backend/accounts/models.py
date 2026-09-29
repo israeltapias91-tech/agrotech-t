@@ -7,6 +7,7 @@ is_active es técnico y se sincroniza: ACTIVE -> True, resto -> False.
 
 import uuid
 
+from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
 
@@ -45,3 +46,42 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+
+class EmailOTP(models.Model):
+    """Desafío OTP de login por correo (feature/auth-email-otp).
+
+    El challenge_id liga el código a UN intento concreto de login
+    (tras contraseña válida). Sin sesión Django a medio autenticar:
+    la sesión definitiva nace solo en django_login() post-OTP.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    challenge_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="email_otps"
+    )
+    code_hash = models.CharField(max_length=128)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveIntegerField(default=0)
+    max_attempts = models.PositiveIntegerField(default=5)
+    used_at = models.DateTimeField(null=True, blank=True)
+    superseded_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["challenge_id"])]
+
+    @property
+    def is_usable(self) -> bool:
+        from django.utils import timezone
+
+        return (
+            self.used_at is None
+            and self.superseded_at is None
+            and self.expires_at > timezone.now()
+            and self.attempts < self.max_attempts
+        )
+
+    def __str__(self):
+        return f"OTP {self.challenge_id} ({self.user})"

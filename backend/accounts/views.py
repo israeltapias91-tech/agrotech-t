@@ -94,11 +94,11 @@ class EmailChangeView(APIView):
 
 
 class LoginView(APIView):
-    """Correo + contraseña -> sesión Django (cookie HttpOnly, 24h).
+    """Fase 1: correo + contraseña -> desafío OTP (SIN sesión todavía).
 
-    Throttling ScopedRateThrottle (scope 'login') = primera capa anti
-    fuerza bruta. NO es la única defensa: falta backoff por cuenta,
-    captcha y WAF/fail2ban en fases posteriores.
+    La sesión definitiva nace solo en OtpVerifyView. Throttling
+    ScopedRateThrottle (scope 'login') = primera capa anti fuerza
+    bruta; el OTP suma sus propias capas (intentos, expiración, reenvíos).
     """
 
     permission_classes = [AllowAny]
@@ -125,13 +125,75 @@ class LoginView(APIView):
                 {"code": exc.code, "detail": str(exc)},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        django_login(request, user)  # crea sesión nueva, las anteriores siguen vivas
+        otp = services.issue_login_otp(user)  # sin django_login() aquí
+        return Response(
+            {
+                "code": "otp_required",
+                "detail": "Revisa tu correo e introduce el código",
+                "challenge_id": str(otp.challenge_id),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class OtpVerifyView(APIView):
+    """Fase 2: challenge_id + code -> sesión Django definitiva."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_otp"
+
+    def post(self, request):
+        challenge_id = request.data.get("challenge_id", "")
+        code = request.data.get("code", "")
+        if not challenge_id or not code:
+            return Response(
+                {"code": "fields_required", "detail": "challenge_id y code requeridos"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            user = services.verify_login_otp(challenge_id, code)
+        except services.OTPExpired as exc:
+            return _error(exc, status.HTTP_400_BAD_REQUEST)
+        except services.OTPAttemptsExceeded as exc:
+            return _error(exc, status.HTTP_429_TOO_MANY_REQUESTS)
+        except services.OTPError as exc:
+            return _error(exc, status.HTTP_400_BAD_REQUEST)
+        django_login(request, user)  # aquí sí: sesión nueva, anteriores vivas
         return Response(
             {
                 "code": "authenticated",
                 "detail": "Sesión creada",
                 "email": user.email,
                 "account_status": user.account_status,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class OtpResendView(APIView):
+    """Reenvío ligado al desafío (que ya pasó la contraseña)."""
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_otp"
+
+    def post(self, request):
+        challenge_id = request.data.get("challenge_id", "")
+        if not challenge_id:
+            return Response(
+                {"code": "fields_required", "detail": "challenge_id requerido"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            otp = services.resend_login_otp(challenge_id)
+        except services.OTPError as exc:
+            return _error(exc, status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "code": "otp_resent",
+                "detail": "Nuevo código enviado, el anterior quedó inválido",
+                "challenge_id": str(otp.challenge_id),
             },
             status=status.HTTP_200_OK,
         )
