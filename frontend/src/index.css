@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* AGROTECH base mínima (FASE 1). El sistema visual definitivo va en FASE 2. */
+body {
+  margin: 0;
+}
