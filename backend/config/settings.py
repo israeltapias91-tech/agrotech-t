@@ -43,12 +43,13 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",  # debe ir arriba
     "django.middleware.security.SecurityMiddleware",
+    "config.middleware.SecurityHeadersMiddleware",  # FASE 4: Permissions-Policy + CSP report-only
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",  # DENY por defecto
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -185,3 +186,35 @@ OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
 OTP_RESEND_LIMIT = int(os.getenv("OTP_RESEND_LIMIT", "3"))
 OTP_RESEND_WINDOW_SECONDS = int(os.getenv("OTP_RESEND_WINDOW_SECONDS", "900"))
 OTP_RESEND_MIN_INTERVAL = int(os.getenv("OTP_RESEND_MIN_INTERVAL", "60"))
+
+# --- Seguridad HTTP (FASE 4): progresiva, compatible con dev HTTP ---
+# Producción: SECURE_SSL_REDIRECT=True + HSTS (solo tras comprobar HTTPS).
+SECURE_SSL_REDIRECT = _env_bool("SECURE_SSL_REDIRECT", False)
+SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
+SECURE_HSTS_PRELOAD = _env_bool("SECURE_HSTS_PRELOAD", False)  # evaluar después
+SECURE_CONTENT_TYPE_NOSNIFF = True  # X-Content-Type-Options, seguro siempre
+SECURE_REFERRER_POLICY = os.getenv("SECURE_REFERRER_POLICY", "strict-origin-when-cross-origin")
+CSP_REPORT_ONLY = _env_bool("CSP_REPORT_ONLY", True)  # graduar a enforce en staging
+
+# --- Backoff progresivo (FASE 4): segunda capa tras throttling ---
+# Ventana deslizante por clave; espera = base * 2^(n-umbral), tope max.
+# Nunca permanente: al expirar la ventana la cuenta vuelve a intentar.
+BACKOFF_LOGIN_THRESHOLD = int(os.getenv("BACKOFF_LOGIN_THRESHOLD", "5"))
+BACKOFF_LOGIN_WINDOW_SECONDS = int(os.getenv("BACKOFF_LOGIN_WINDOW_SECONDS", "900"))
+BACKOFF_LOGIN_BASE_SECONDS = int(os.getenv("BACKOFF_LOGIN_BASE_SECONDS", "30"))
+BACKOFF_LOGIN_MAX_SECONDS = int(os.getenv("BACKOFF_LOGIN_MAX_SECONDS", "300"))
+BACKOFF_OTP_THRESHOLD = int(os.getenv("BACKOFF_OTP_THRESHOLD", "10"))
+BACKOFF_OTP_WINDOW_SECONDS = int(os.getenv("BACKOFF_OTP_WINDOW_SECONDS", "900"))
+BACKOFF_OTP_BASE_SECONDS = int(os.getenv("BACKOFF_OTP_BASE_SECONDS", "60"))
+BACKOFF_OTP_MAX_SECONDS = int(os.getenv("BACKOFF_OTP_MAX_SECONDS", "600"))
+
+# --- Logging (FASE 4): eventos de seguridad, sin secretos ---
+# NUNCA: passwords, OTP, tokens, cookies, SECRET_KEY ni datos innecesarios.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"sec": {"format": "[{asctime}] {levelname} {name} {message}", "style": "{"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "sec"}},
+    "loggers": {"agrotech.security": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+}

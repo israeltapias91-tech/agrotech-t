@@ -21,6 +21,10 @@ const MAP: Record<string, string> = {
   fields_required: 'Completa los campos requeridos.',
   email_required: 'El correo es requerido.',
   network_error: 'No pudimos conectar con el servidor. Verifica tu conexión.',
+  rate_limited: 'Demasiados intentos. Espera antes de volver a intentarlo.',
+  login_backoff: 'Demasiados intentos. Espera antes de volver a intentarlo.',
+  otp_backoff: 'Demasiados intentos. Espera antes de volver a intentarlo.',
+  session_expired: 'Tu sesión expiró. Inicia sesión de nuevo.',
 }
 
 export function userMessage(code: string, fallback = 'Ocurrió un error inesperado. Intenta de nuevo.'): string {

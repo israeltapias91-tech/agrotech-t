@@ -106,6 +106,8 @@ class LoginView(APIView):
     throttle_scope = "login"
 
     def post(self, request):
+        from .security import audit, backoff_clear, backoff_fail, backoff_wait
+
         email = request.data.get("email", "")
         password = request.data.get("password", "")
         if not email or not password:
@@ -113,18 +115,31 @@ class LoginView(APIView):
                 {"code": "fields_required", "detail": "email y password requeridos"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        norm = services._user_model().objects.normalize_email(email)
+        wait = backoff_wait(norm.lower(), "LOGIN")
+        if wait:
+            err = services.LoginBackoff(f"Demasiados intentos. Espera {wait} segundos.")
+            err.retry_after = wait
+            audit("auth.login.fail", email=norm, reason="backoff")
+            body = {"code": err.code, "detail": str(err), "retry_after": wait}
+            return Response(body, status=status.HTTP_429_TOO_MANY_REQUESTS)
         try:
             user = services.authenticate_for_login(email, password)
         except services.InvalidCredentials as exc:
+            backoff_fail(norm.lower(), "LOGIN")
+            audit("auth.login.fail", email=norm, reason="invalid_credentials")
             return Response(
                 {"code": exc.code, "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except LoginError as exc:
+            audit("auth.login.fail", email=norm, reason=exc.code)
             return Response(
                 {"code": exc.code, "detail": str(exc)},
                 status=status.HTTP_403_FORBIDDEN,
             )
+        backoff_clear(norm.lower(), "LOGIN")
+        audit("auth.login.ok", user_id=str(user.pk), email=user.email)
         otp = services.issue_login_otp(user)  # sin django_login() aquí
         return Response(
             {
@@ -157,6 +172,9 @@ class OtpVerifyView(APIView):
             return _error(exc, status.HTTP_400_BAD_REQUEST)
         except services.OTPAttemptsExceeded as exc:
             return _error(exc, status.HTTP_429_TOO_MANY_REQUESTS)
+        except services.OTPBackoff as exc:
+            body = {"code": exc.code, "detail": str(exc), "retry_after": exc.retry_after}
+            return Response(body, status=status.HTTP_429_TOO_MANY_REQUESTS)
         except services.OTPError as exc:
             return _error(exc, status.HTTP_400_BAD_REQUEST)
         django_login(request, user)  # aquí sí: sesión nueva, anteriores vivas
@@ -245,7 +263,10 @@ class LogoutAllView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        from .security import audit
+
         closed = services.keep_only_current_session(request)
+        audit("auth.session.logout_all", user_id=str(request.user.pk), closed=closed)
         return Response(
             {"code": "all_closed", "detail": f"Se cerraron {closed} sesiones (actual viva)"},
             status=status.HTTP_200_OK,
@@ -296,10 +317,14 @@ class PasswordResetConfirmView(APIView):
             user = services.confirm_password_reset(uid, token, new_password, confirm)
         except PasswordResetError as exc:
             return _error(exc, status.HTTP_400_BAD_REQUEST)
+        from .security import audit
+
         if request.user.is_authenticated and str(request.user.pk) == str(user.pk):
             services.rotate_on_password_change(request, user)  # CASO 1
+            audit("auth.password.changed", user_id=str(user.pk))
         else:
             services.revoke_all_sessions(user)  # CASO 2
+            audit("auth.password.reset", user_id=str(user.pk))
         return Response(
             {"code": "password_changed", "detail": "Contraseña actualizada, inicia sesión"},
             status=status.HTTP_200_OK,

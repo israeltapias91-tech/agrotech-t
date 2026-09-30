@@ -59,9 +59,10 @@ export default function OtpPage() {
       await refresh()
       navigate('/app', { replace: true })
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'otp_attempts_exceeded') {
+      if (err instanceof ApiError && (err.code === 'otp_attempts_exceeded' || err.status === 429)) {
         setState('blocked')
         setAttemptsLeft(0)
+        setError(userMessage(err.code === 'otp_attempts_exceeded' ? err.code : 'rate_limited', err.detail))
       } else if (err instanceof ApiError && err.code === 'otp_expired') {
         setState('expired')
       } else {

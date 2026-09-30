@@ -52,9 +52,14 @@ export async function apiFetch<T>(path: string, { method = 'GET', body }: Option
     data = {}
   }
   if (!res.ok) {
+    // 429 de DRF (throttle) no trae `code`: se normaliza para mensaje adecuado.
+    // 401 no lo emite el backend (SessionAuth responde 403); se mapea igual.
+    let code = typeof data.code === 'string' ? data.code : 'unknown_error'
+    if (code === 'unknown_error' && res.status === 429) code = 'rate_limited'
+    if (code === 'unknown_error' && res.status === 401) code = 'session_expired'
     throw new ApiError(
       res.status,
-      typeof data.code === 'string' ? data.code : 'unknown_error',
+      code,
       typeof data.detail === 'string' ? data.detail : 'Ocurrió un error inesperado.',
       Array.isArray(data.messages) ? (data.messages as string[]) : undefined,
     )
