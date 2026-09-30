@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { authApi } from '../../api/auth'
+import { ApiError } from '../../api/client'
 import Alert from '../../components/ui/Alert'
 import AuthCard from '../../components/auth/AuthCard'
 import AuthInput from '../../components/auth/AuthInput'
@@ -7,13 +9,13 @@ import AuthLayout from '../../components/auth/AuthLayout'
 import Button from '../../components/ui/Button'
 import { isEmail } from '../../utils/validation'
 
-/* Visual solamente: respuesta siempre neutra, sin revelar si existe. */
+/* Respuesta siempre neutra: nunca revela si el correo existe. */
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
   const [status, setStatus] = useState<'idle' | 'loading' | 'sent'>('idle')
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!email.trim()) {
       setError('El correo es requerido')
@@ -25,7 +27,13 @@ export default function ForgotPasswordPage() {
     }
     setError('')
     setStatus('loading')
-    window.setTimeout(() => setStatus('sent'), 1000) // demo visual
+    try {
+      await authApi.requestPasswordReset(email.trim())
+      setStatus('sent')
+    } catch (err) {
+      setStatus('idle')
+      setError(err instanceof ApiError ? 'Ocurrió un error inesperado.' : 'Ocurrió un error inesperado.')
+    }
   }
 
   return (
@@ -33,10 +41,10 @@ export default function ForgotPasswordPage() {
       <AuthCard title="Recuperar contraseña" subtitle="Te enviaremos instrucciones para restablecerla">
         {status === 'sent' ? (
           <Alert kind="success" title="Revisa tu correo">
-            Si el correo existe, recibirás instrucciones para restablecer tu contraseña. (Vista previa)
+            Si el correo existe, recibirás instrucciones para restablecer tu contraseña.
           </Alert>
         ) : (
-          <form onSubmit={submit} noValidate>
+          <form onSubmit={(e) => void submit(e)} noValidate>
             <AuthInput label="Correo electrónico" name="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} error={error} placeholder="usuario@correo.com" />
             <Button loading={status === 'loading'}>Enviar enlace</Button>
           </form>
