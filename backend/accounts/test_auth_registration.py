@@ -13,7 +13,7 @@ from . import services
 User = get_user_model()
 ALTA = mock.patch.dict(
     ScopedRateThrottle.THROTTLE_RATES,
-    {"login": "1000/minute", "password_reset": "1000/minute", "registration": "1000/hour"},
+    {"login": "1000/minute", "password_reset": "1000/minute", "registration": "1000/hour", "email_otp": "1000/minute"},
 )
 
 REG = "/api/auth/register/"
