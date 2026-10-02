@@ -1,0 +1,250 @@
+"""AGROTECH accounts — servicios de verificación de email.
+
+Verificar un correo significa: probar que quien pidió la cuenta controla
+el buzón. No autentica (no crea sesión), solo flipa email_verified.
+"""
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.mail import send_mail
+from django.utils import timezone
+
+from .tokens import (
+    BadSignature,
+    SignatureExpired,
+    make_email_verification_token,
+    unsign_email_verification_token,
+)
+
+
+class EmailVerificationError(Exception):
+    code = "verification_error"
+
+
+class TokenInvalid(EmailVerificationError):
+    code = "token_invalid"
+
+
+class TokenExpired(EmailVerificationError):
+    code = "token_expired"
+
+
+class AlreadyVerified(EmailVerificationError):
+    code = "already_verified"
+
+
+class UserNotFound(EmailVerificationError):
+    code = "user_not_found"
+
+
+class EmailTaken(EmailVerificationError):
+    code = "email_taken"
+
+
+class LoginError(Exception):
+    code = "login_error"
+
+
+class InvalidCredentials(LoginError):
+    code = "invalid_credentials"
+
+
+class AccountSuspended(LoginError):
+    code = "account_suspended"
+
+
+class AccountDeactivated(LoginError):
+    code = "account_deactivated"
+
+
+class EmailNotVerified(LoginError):
+    code = "email_not_verified"
+
+
+def authenticate_for_login(email: str, password: str):
+    """Puertas del login (mismas que el flujo, orden seguro Django).
+
+    Orden: credenciales (hash) -> cuenta activa -> correo verificado.
+    Se verifica la contraseña ANTES de revelar estado, para no enumerar
+    cuentas suspendidas/sin verificar con cualquier contraseña. Las
+    puertas son las mismas, solo cambia el orden de evaluación.
+    """
+    User = _user_model()
+    email = User.objects.normalize_email(email or "")
+    try:
+        user = User.objects.get(email__iexact=email)
+    except User.DoesNotExist as exc:
+        raise InvalidCredentials("Correo o contraseña inválidos") from exc
+
+    if not user.check_password(password or ""):
+        raise InvalidCredentials("Correo o contraseña inválidos")
+    if user.account_status == User.AccountStatus.SUSPENDED:
+        raise AccountSuspended("Cuenta suspendida, contacta soporte")
+    if user.account_status == User.AccountStatus.DEACTIVATED:
+        raise AccountDeactivated("Cuenta desactivada, contacta soporte")
+    if not user.email_verified:
+        raise EmailNotVerified("Debes verificar tu correo antes de entrar")
+    return user
+
+
+def _user_model():
+    return get_user_model()
+
+
+def build_verification_link(token: str) -> str:
+    base = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    return f"{base}/verify-email?token={token}"
+
+
+def send_verification_email(user, token: str) -> str:
+    """Envía el correo. Devuelve el link (útil en dev/tests)."""
+    link = build_verification_link(token)
+    subject = "AGROTECH — verifica tu correo"
+    body = (
+        f"Hola,\n\nConfirma tu correo pulsando este enlace "
+        f"(válido {int(getattr(settings, 'EMAIL_VERIFICATION_TIMEOUT_SECONDS', 86400)) // 3600} h):\n{link}\n\n"
+        "Si no creaste esta cuenta, ignora este mensaje."
+    )
+    send_mail(
+        subject,
+        body,
+        getattr(settings, "DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>"),
+        [user.email],
+        fail_silently=False,
+    )
+    return link
+
+
+def request_verification(user) -> tuple[str, str]:
+    """Genera token + envía correo. Devuelve (token, link)."""
+    token = make_email_verification_token(user)
+    link = send_verification_email(user, token)
+    return token, link
+
+
+def verify_email(token: str):
+    """Valida token y marca email_verified=True. Uso único: segundo uso -> AlreadyVerified."""
+    try:
+        user_pk, token_email = unsign_email_verification_token(token)
+    except SignatureExpired as exc:
+        raise TokenExpired("El enlace expiró, pide uno nuevo") from exc
+    except BadSignature as exc:
+        raise TokenInvalid("Enlace inválido o alterado") from exc
+
+    try:
+        user = _user_model().objects.get(pk=user_pk)
+    except _user_model().DoesNotExist as exc:
+        raise TokenInvalid("Cuenta no encontrada") from exc
+
+    if user.email_verified:
+        raise AlreadyVerified("El correo ya fue verificado")
+    if user.email != token_email:
+        # El correo pendiente cambió después de emitir el token.
+        raise TokenInvalid("El correo cambió, pide un nuevo enlace")
+    user.email_verified = True
+    user.save(update_fields=["email_verified", "is_active", "updated_at"])
+    return user
+
+
+def resend_verification(email: str):
+    """Reenvía el correo si la cuenta existe y sigue sin verificar."""
+    email = _user_model().objects.normalize_email(email)
+    try:
+        user = _user_model().objects.get(email__iexact=email)
+    except _user_model().DoesNotExist as exc:
+        raise UserNotFound("Si la cuenta existe, reenviamos el correo") from exc
+    if user.email_verified:
+        raise AlreadyVerified("El correo ya fue verificado")
+    return user, *request_verification(user)
+
+
+def change_pending_email(token: str, new_email: str):
+    """Cambia el correo pendiente (con token vigente del correo anterior).
+
+    Invalida el token viejo porque el nuevo token liga el email nuevo.
+    """
+    try:
+        user_pk, token_email = unsign_email_verification_token(token)
+    except SignatureExpired as exc:
+        raise TokenExpired("El enlace expiró, pide uno nuevo") from exc
+    except BadSignature as exc:
+        raise TokenInvalid("Enlace inválido o alterado") from exc
+
+    try:
+        user = _user_model().objects.get(pk=user_pk)
+    except _user_model().DoesNotExist as exc:
+        raise TokenInvalid("Cuenta no encontrada") from exc
+
+    if user.email_verified:
+        raise AlreadyVerified("El correo ya fue verificado, usa tu cuenta")
+    if user.email != token_email:
+        raise TokenInvalid("El enlace ya no es vigente")
+
+    User = _user_model()
+    new_email = User.objects.normalize_email(new_email)
+    if not new_email:
+        raise TokenInvalid("Nuevo correo inválido")
+    if User.objects.filter(email__iexact=new_email).exclude(pk=user.pk).exists():
+        raise EmailTaken("Ese correo ya está en uso")
+
+    user.email = new_email
+    user.email_verified = False
+    user.save(update_fields=["email", "email_verified", "is_active", "updated_at"])
+    new_token, link = request_verification(user)
+    return user, new_token, link
+
+
+# --- Sesiones (feature/auth-session-security) ---
+
+SESSION_KEY = "_auth_user_id"
+
+
+def _decode_session(session) -> str | None:
+    try:
+        return str(session.get_decoded().get(SESSION_KEY))
+    except Exception:
+        return None
+
+
+def active_session_keys(user, exclude_key: str | None = None) -> list[str]:
+    """Keys de sesiones vivas del usuario (para matriz PC/celular/tablet)."""
+    from django.contrib.sessions.models import Session
+
+    keys = []
+    for s in Session.objects.filter(expire_date__gt=timezone.now()):
+        if _decode_session(s) == str(user.pk) and s.session_key != exclude_key:
+            keys.append(s.session_key)
+    return keys
+
+
+def keep_only_current_session(request) -> int:
+    """Cierra TODAS las sesiones del usuario excepto la actual.
+
+    Decisión: el cierre global excluye la invocante (no te expulsa).
+    Devuelve cuántas cerró.
+    """
+    from django.contrib.sessions.models import Session
+
+    current = request.session.session_key
+    doomed = active_session_keys(request.user, exclude_key=current)
+    if doomed:
+        Session.objects.filter(session_key__in=doomed).delete()
+    return len(doomed)
+
+
+def rotate_on_password_change(request, user) -> None:
+    """Política tras cambiar contraseña: actual viva, demás muertas.
+
+    Decisión: cerrar las demás. `update_session_auth_hash` rota el hash
+    en la sesión actual (la mantiene) e invalida las demás porque el
+    session auth hash ya no coincide. Reutilizar en password-reset.
+
+    Nota Django 5.2: la función ya no persiste (`save` desapareció) y
+    solo rota el hash si `request.user == user`. Guardamos explícito
+    para no depender del middleware al final del response.
+    """
+    from django.contrib.auth import update_session_auth_hash
+
+    update_session_auth_hash(request, user)
+    request.session.save()
+    keep_only_current_session(request)
