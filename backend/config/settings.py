@@ -43,6 +43,9 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",  # debe ir arriba
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise: sirve /static/ con DEBUG=False (Railway/prod). Debe ir
+    # justo después de SecurityMiddleware. En dev local no interfiere.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "config.middleware.SecurityHeadersMiddleware",  # FASE 4: Permissions-Policy + CSP report-only
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -107,11 +110,18 @@ USE_TZ = True
 STATIC_URL = "static/"
 # Directorio de collectstatic (Docker/prod). En dev local no se usa.
 STATIC_ROOT = os.getenv("STATIC_ROOT", str(BASE_DIR / "staticfiles"))
+# WhiteNoise con archivos comprimidos + hash (prod). En dev local no afecta.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Sesiones: decisión 21 (varias sesiones + 24h, cookie Django) ---
 # feature/auth-session-security: dev vs prod vía env. En prod HTTPS:
 # SESSION_COOKIE_SECURE=True + CSRF_COOKIE_SECURE=True + SameSite=Lax.
+# Netlify<>Railway (cross-site): SESSION_SAMESITE=None + Secure=True,
+# si no el navegador no envía sessionid y el login rebota a /login.
 SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "86400"))  # 24h
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = os.getenv("SESSION_SAMESITE", "Lax")
@@ -198,6 +208,9 @@ OTP_RESEND_MIN_INTERVAL = int(os.getenv("OTP_RESEND_MIN_INTERVAL", "60"))
 
 # --- Seguridad HTTP (FASE 4): progresiva, compatible con dev HTTP ---
 # Producción: SECURE_SSL_REDIRECT=True + HSTS (solo tras comprobar HTTPS).
+# Railway/proxy TLS: confía en X-Forwarded-Proto para que is_secure() sea
+# True tras el proxy. Inofensivo en dev directo (sin cabecera se ignora).
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = _env_bool("SECURE_SSL_REDIRECT", False)
 SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
