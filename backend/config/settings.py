@@ -36,7 +36,8 @@ INSTALLED_APPS = [
     # Terceros FASE 3
     "rest_framework",
     "corsheaders",
-    # Apps AGROTECH (FASE 4+): accounts, farms, permissions, subscriptions...
+    # Apps AGROTECH FASE 4
+    "accounts",
 ]
 
 MIDDLEWARE = [
@@ -94,8 +95,8 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# ¡FASE 4! Descomentar solo cuando exista accounts.User (UUID + email login).
-# AUTH_USER_MODEL = "accounts.User"
+# FASE 4: modelo de identidad oficial (UUID + email login).
+AUTH_USER_MODEL = "accounts.User"
 
 LANGUAGE_CODE = "es-co"
 TIME_ZONE = "America/Bogota"
@@ -135,3 +136,18 @@ REST_FRAMEWORK = {
 # Duración periodo de gracia (decisión 40): sin valor definido → vacío = pendiente.
 GRACE_PERIOD_DAYS = os.getenv("GRACE_PERIOD_DAYS", "")
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "14"))
+
+# --- Email + verificación (feature/auth-email-verification, sin JWT) ---
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend" if DEBUG else "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = os.getenv("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "1025"))
+EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", False)
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+EMAIL_VERIFICATION_SALT = os.getenv("EMAIL_VERIFICATION_SALT", "agrotech-email-verify")
+EMAIL_VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("EMAIL_VERIFICATION_TIMEOUT_SECONDS", "86400"))
