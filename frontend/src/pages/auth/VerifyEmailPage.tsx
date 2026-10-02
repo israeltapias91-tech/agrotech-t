@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { authApi } from '../../api/auth'
 import { ApiError } from '../../api/client'
@@ -10,7 +10,7 @@ import AuthLayout from '../../components/auth/AuthLayout'
 import Button from '../../components/ui/Button'
 import Spinner from '../../components/ui/Spinner'
 
-type State = 'working' | 'verified' | 'error'
+type State = 'working' | 'verified' | 'already' | 'expired' | 'invalid' | 'missing' | 'error'
 
 /* Token desde la URL (?token=). Auto-verifica al montar. */
 export default function VerifyEmailPage() {
@@ -24,27 +24,41 @@ export default function VerifyEmailPage() {
   const [changing, setChanging] = useState(false)
   const [changeState, setChangeState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle')
   const [changeDetail, setChangeDetail] = useState('')
+  // Token ya enviado por esta instancia: evita el doble POST que provoca
+  // React StrictMode en desarrollo (el segundo llegaría como already_verified).
+  // Guarda por instancia (no global): un token reutilizado de verdad en una
+  // visita nueva sí se POSTea y se muestra como `already`.
+  const attemptedToken = useRef<string | null>(null)
+  // Montaje vigente: evita setState tras desmontar sin anular la resolución
+  // del POST único en vuelo (el cleanup de StrictMode no debe silenciarlo).
+  const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     const token = params.get('token') ?? ''
     if (!token) {
-      setState('error')
-      setDetail('Falta el token de verificación. Abre el enlace de tu correo.')
+      setState('missing')
       return
     }
-    let alive = true
+    if (attemptedToken.current === token) return
+    attemptedToken.current = token
     authApi
       .verifyEmail(token)
       .then(() => {
-        if (alive) setState('verified')
+        if (mountedRef.current) setState('verified')
       })
       .catch((err: unknown) => {
-        if (!alive) return
-        setState('error')
-        setDetail(err instanceof ApiError ? userMessage(err.code, err.detail) : 'Ocurrió un error inesperado.')
+        if (!mountedRef.current) return
+        if (err instanceof ApiError && err.code === 'already_verified') setState('already')
+        else if (err instanceof ApiError && err.code === 'token_expired') setState('expired')
+        else if (err instanceof ApiError && err.code === 'token_invalid') setState('invalid')
+        else {
+          setState('error')
+          setDetail(err instanceof ApiError ? userMessage(err.code, err.detail) : 'Ocurrió un error inesperado.')
+        }
       })
     return () => {
-      alive = false
+      mountedRef.current = false
     }
   }, [params])
 
@@ -68,7 +82,27 @@ export default function VerifyEmailPage() {
         {state === 'working' && <Spinner label="Verificando enlace…" />}
         {state === 'verified' && (
           <Alert kind="success" title="Correo verificado">
-            Tu cuenta quedó habilitada para iniciar sesión.
+            Tu correo electrónico fue verificado correctamente.
+          </Alert>
+        )}
+        {state === 'already' && (
+          <Alert kind="success" title="Correo ya verificado">
+            Esta cuenta ya tiene el correo electrónico verificado.
+          </Alert>
+        )}
+        {state === 'expired' && (
+          <Alert kind="error" title="Enlace expirado">
+            El enlace venció. Pide uno nuevo con Reenviar.
+          </Alert>
+        )}
+        {state === 'invalid' && (
+          <Alert kind="error" title="Enlace no válido">
+            Este enlace no es válido o ya fue utilizado.
+          </Alert>
+        )}
+        {state === 'missing' && (
+          <Alert kind="error" title="Falta el token de verificación">
+            Abre el enlace enviado a tu correo.
           </Alert>
         )}
         {state === 'error' && (
@@ -76,7 +110,15 @@ export default function VerifyEmailPage() {
             {detail}
           </Alert>
         )}
-        {(state === 'verified' || state === 'error') && (
+        {(state === 'verified' || state === 'already') && (
+          <Link
+            to="/login"
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-forest-700 px-4 py-2.5 font-semibold text-white transition hover:bg-forest-600"
+          >
+            Continuar al inicio de sesión
+          </Link>
+        )}
+        {(state === 'expired' || state === 'invalid' || state === 'missing' || state === 'error') && (
           <div className="mt-4">
             <p className="mb-2 text-sm font-medium text-neutral-700">¿No te llegó o venció el enlace?</p>
             <form onSubmit={(e) => void resend(e)} className="flex flex-col gap-2">
@@ -130,7 +172,7 @@ export default function VerifyEmailPage() {
             )}
             <p className="mt-4 text-center text-sm">
               <Link to="/login" className="font-medium text-forest-700 hover:text-forest-600">
-                {state === 'verified' ? 'Ir al inicio de sesión' : 'Volver al inicio de sesión'}
+                Volver al inicio de sesión
               </Link>
             </p>
           </div>
