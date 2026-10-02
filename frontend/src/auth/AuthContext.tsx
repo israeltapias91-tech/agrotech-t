@@ -9,7 +9,7 @@ type AuthState = {
   user: SessionInfo | null
   checking: boolean
   challengeId: string | null
-  refresh: () => Promise<void>
+  refresh: () => Promise<SessionInfo | null>
   setChallengeId: (id: string | null) => void
   logout: () => Promise<void>
 }
@@ -21,14 +21,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [checking, setChecking] = useState(true)
   const [challengeId, setChallengeId] = useState<string | null>(null)
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<SessionInfo | null> => {
     try {
       await authApi.csrf()
       const info = await authApi.session()
       setUser(info)
+      return info
     } catch (e) {
       if (e instanceof ApiError && (e.status === 403 || e.status === 401)) setUser(null)
       else setUser(null)
+      return null
     } finally {
       setChecking(false)
     }

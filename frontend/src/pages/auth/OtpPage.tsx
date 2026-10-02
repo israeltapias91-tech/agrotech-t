@@ -19,10 +19,11 @@ function format(s: number) {
 
 type State = 'idle' | 'loading' | 'expired' | 'blocked'
 
-/* challenge_id + code (nunca email+code). Sin challenge → /login. */
+/* challenge_id + code (nunca email+code). Sin challenge se resuelve por sesión:
+   con usuario autenticado → /app, sin usuario → /login. */
 export default function OtpPage() {
   const navigate = useNavigate()
-  const { challengeId, setChallengeId, refresh } = useAuth()
+  const { challengeId, setChallengeId, refresh, user, checking } = useAuth()
   const [code, setCode] = useState('')
   const [state, setState] = useState<State>('idle')
   const [error, setError] = useState('')
@@ -31,8 +32,9 @@ export default function OtpPage() {
   const [resending, setResending] = useState(false)
 
   useEffect(() => {
-    if (!challengeId) navigate('/login', { replace: true })
-  }, [challengeId, navigate])
+    if (checking || challengeId) return
+    navigate(user ? '/app' : '/login', { replace: true })
+  }, [challengeId, checking, user, navigate])
 
   useEffect(() => {
     if (secondsLeft <= 0) {
@@ -47,6 +49,7 @@ export default function OtpPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (state === 'loading') return
     if (!isOtp(code)) {
       setError('Ingresa los 6 dígitos numéricos')
       return
@@ -55,9 +58,14 @@ export default function OtpPage() {
     setState('loading')
     try {
       await authApi.verifyOtp(challengeId, code)
-      setChallengeId(null)
-      await refresh()
-      navigate('/app', { replace: true })
+      const sessionUser = await refresh()
+      if (sessionUser) {
+        setChallengeId(null)
+        navigate('/app', { replace: true })
+      } else {
+        setState('idle')
+        setError('No se pudo confirmar la sesión. Intenta nuevamente.')
+      }
     } catch (err) {
       if (err instanceof ApiError && (err.code === 'otp_attempts_exceeded' || err.status === 429)) {
         setState('blocked')
