@@ -167,6 +167,13 @@ EMAIL_BACKEND = os.getenv(
 EMAIL_HOST = os.getenv("EMAIL_HOST", "localhost")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "1025"))
 EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", False)
+# FASE 5 email-real (opción B): SSL implícito para puerto 465.
+# Mutuamente excluyente con TLS: usa uno u otro, nunca ambos.
+EMAIL_USE_SSL = _env_bool("EMAIL_USE_SSL", False)
+if EMAIL_USE_TLS and EMAIL_USE_SSL:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured("EMAIL_USE_TLS y EMAIL_USE_SSL son excluyentes: usa solo uno")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>")
