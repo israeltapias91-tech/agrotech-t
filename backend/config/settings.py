@@ -105,6 +105,8 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+# Directorio de collectstatic (Docker/prod). En dev local no se usa.
+STATIC_ROOT = os.getenv("STATIC_ROOT", str(BASE_DIR / "staticfiles"))
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Sesiones: decisión 21 (varias sesiones + 24h, cookie Django) ---
