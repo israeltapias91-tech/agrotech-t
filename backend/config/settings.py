@@ -36,7 +36,8 @@ INSTALLED_APPS = [
     # Terceros FASE 3
     "rest_framework",
     "corsheaders",
-    # Apps AGROTECH (FASE 4+): accounts, farms, permissions, subscriptions...
+    # Apps AGROTECH FASE 4
+    "accounts",
 ]
 
 MIDDLEWARE = [
@@ -94,8 +95,8 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
-# ¡FASE 4! Descomentar solo cuando exista accounts.User (UUID + email login).
-# AUTH_USER_MODEL = "accounts.User"
+# FASE 4: modelo de identidad oficial (UUID + email login).
+AUTH_USER_MODEL = "accounts.User"
 
 LANGUAGE_CODE = "es-co"
 TIME_ZONE = "America/Bogota"
@@ -106,11 +107,22 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Sesiones: decisión 21 (varias sesiones + 24h, cookie Django) ---
+# feature/auth-session-security: dev vs prod vía env. En prod HTTPS:
+# SESSION_COOKIE_SECURE=True + CSRF_COOKIE_SECURE=True + SameSite=Lax.
 SESSION_COOKIE_AGE = int(os.getenv("SESSION_COOKIE_AGE", "86400"))  # 24h
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = os.getenv("SESSION_SAMESITE", "Lax")
 SESSION_COOKIE_SECURE = _env_bool("SESSION_COOKIE_SECURE", False)  # True en prod HTTPS
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+
+# --- CSRF (feature/auth-session-security): espejo de sesión ---
+# csrftoken debe leerlo JS para el header X-CSRFToken -> HttpOnly=False.
+# Secure/SameSite iguales que la sesión para no romper React en prod.
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = os.getenv("CSRF_SAMESITE", os.getenv("SESSION_SAMESITE", "Lax"))
+CSRF_COOKIE_SECURE = _env_bool(
+    "CSRF_COOKIE_SECURE", os.getenv("SESSION_COOKIE_SECURE", "False")
+)
 
 # --- CORS/CSRF para React futuro (localhost:5173 Vite / 3000 CRA) ---
 CORS_ALLOW_CREDENTIALS = True
@@ -122,6 +134,8 @@ CSRF_TRUSTED_ORIGINS = _env_list(
 )
 
 # --- DRF base (permisos concretos en fase de matriz, pendiente) ---
+# Throttling: solo el login lo usa (scope 'login'). Primera capa contra
+# fuerza bruta; NO la única (falta backoff/captcha/WAF en fases posteriores).
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
@@ -129,9 +143,45 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "login": os.getenv("LOGIN_THROTTLE_RATE", "5/minute"),
+        "password_reset": os.getenv("PASSWORD_RESET_THROTTLE_RATE", "5/minute"),
+        "registration": os.getenv("REGISTRATION_THROTTLE_RATE", "10/hour"),
+        "email_otp": os.getenv("EMAIL_OTP_THROTTLE_RATE", "10/minute"),
+    },
 }
 
 # --- Negocio configurable, PENDIENTES no inventados ---
 # Duración periodo de gracia (decisión 40): sin valor definido → vacío = pendiente.
 GRACE_PERIOD_DAYS = os.getenv("GRACE_PERIOD_DAYS", "")
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "14"))
+
+# --- Email + verificación (feature/auth-email-verification, sin JWT) ---
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend" if DEBUG else "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = os.getenv("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "1025"))
+EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", False)
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+EMAIL_VERIFICATION_SALT = os.getenv("EMAIL_VERIFICATION_SALT", "agrotech-email-verify")
+EMAIL_VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("EMAIL_VERIFICATION_TIMEOUT_SECONDS", "86400"))
+
+# --- Password reset (feature/auth-password-reset, tokens nativos Django) ---
+# Tokens: PasswordResetTokenGenerator (ligan pk + hash + login + email).
+# Expiración nativa vía PASSWORD_RESET_TIMEOUT (segundos).
+PASSWORD_RESET_TIMEOUT = int(os.getenv("PASSWORD_RESET_TIMEOUT_SECONDS", "86400"))
+
+# --- OTP login por correo (feature/auth-email-otp) ---
+# Verificación en dos pasos pragmática. Desafío por challenge_id, hash
+# con make_password, 6 dígitos / 10 min / 5 intentos / 3 reenvíos 15 min.
+OTP_LENGTH = int(os.getenv("OTP_LENGTH", "6"))
+OTP_TIMEOUT_SECONDS = int(os.getenv("OTP_TIMEOUT_SECONDS", "600"))
+OTP_MAX_ATTEMPTS = int(os.getenv("OTP_MAX_ATTEMPTS", "5"))
+OTP_RESEND_LIMIT = int(os.getenv("OTP_RESEND_LIMIT", "3"))
+OTP_RESEND_WINDOW_SECONDS = int(os.getenv("OTP_RESEND_WINDOW_SECONDS", "900"))
+OTP_RESEND_MIN_INTERVAL = int(os.getenv("OTP_RESEND_MIN_INTERVAL", "60"))
