@@ -70,6 +70,10 @@ class EmailNotVerified(LoginError):
     code = "email_not_verified"
 
 
+class LoginBackoff(LoginError):
+    code = "login_backoff"
+
+
 def authenticate_for_login(email: str, password: str):
     """Puertas del login (mismas que el flujo, orden seguro Django).
 
@@ -152,6 +156,9 @@ def verify_email(token: str):
         raise TokenInvalid("El correo cambió, pide un nuevo enlace")
     user.email_verified = True
     user.save(update_fields=["email_verified", "is_active", "updated_at"])
+    from .security import audit
+
+    audit("auth.email.verified", user_id=str(user.pk))
     return user
 
 
@@ -200,6 +207,9 @@ def change_pending_email(token: str, new_email: str):
     user.email_verified = False
     user.save(update_fields=["email", "email_verified", "is_active", "updated_at"])
     new_token, link = request_verification(user)
+    from .security import audit
+
+    audit("auth.email.changed", user_id=str(user.pk))
     return user, new_token, link
 
 
@@ -443,6 +453,9 @@ def register_user(first_name="", last_name="", email="", phone="",
     user.set_password(password)  # hash, nunca plano
     user.save()
     token, link = request_verification(user)  # única fuente de verdad
+    from .security import audit
+
+    audit("auth.registered", user_id=str(user.pk), email=user.email)
     return user, token, link
 
 
@@ -471,6 +484,10 @@ class OTPAttemptsExceeded(OTPError):
 
 class OTPResendLimited(OTPError):
     code = "otp_resend_limited"
+
+
+class OTPBackoff(OTPError):
+    code = "otp_backoff"
 
 
 def _otp_cfg(name: str, default: int) -> int:
@@ -528,6 +545,9 @@ def issue_login_otp(user):
         max_attempts=_otp_cfg("OTP_MAX_ATTEMPTS", 5),
     )
     _send_otp_mail(user, _code, minutes)  # plano solo aquí, nunca en DB/logs
+    from .security import audit
+
+    audit("auth.otp.issued", user_id=str(user.pk))
     return otp
 
 
@@ -540,7 +560,16 @@ def _get_challenge(challenge_id: str):
 
 def verify_login_otp(challenge_id: str, code: str):
     """Valida el código del desafío. OK -> marca usado y devuelve el user."""
+    from .security import audit, backoff_clear, backoff_fail, backoff_wait
+
     otp = _get_challenge(challenge_id)
+    ukey = str(otp.user_id)
+    wait = backoff_wait(ukey, "OTP")
+    if wait:
+        err = OTPBackoff(f"Demasiados intentos. Espera {wait} segundos.")
+        err.retry_after = wait
+        audit("auth.otp.fail", user_id=ukey, reason="backoff")
+        raise err
     if otp.used_at is not None or otp.superseded_at is not None:
         raise OTPInvalid("Código ya utilizado o reemplazado")
     if otp.expires_at <= timezone.now():
@@ -550,6 +579,8 @@ def verify_login_otp(challenge_id: str, code: str):
     if not check_password(code or "", otp.code_hash):
         otp.attempts += 1
         otp.save(update_fields=["attempts"])
+        backoff_fail(ukey, "OTP")
+        audit("auth.otp.fail", user_id=ukey, reason="wrong_code")
         remaining = otp.max_attempts - otp.attempts
         if remaining <= 0:
             raise OTPAttemptsExceeded("Demasiados intentos, pide un código nuevo")
@@ -558,6 +589,8 @@ def verify_login_otp(challenge_id: str, code: str):
         raise err
     otp.used_at = timezone.now()
     otp.save(update_fields=["used_at"])
+    backoff_clear(ukey, "OTP")
+    audit("auth.otp.ok", user_id=ukey)
     return otp.user
 
 
