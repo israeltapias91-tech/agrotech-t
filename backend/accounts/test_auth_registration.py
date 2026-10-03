@@ -128,3 +128,29 @@ class RegistrationTests(TestCase):
         ro = c.post("/api/auth/otp/verify/", {"challenge_id": rl.data["challenge_id"], "code": code}, format="json")
         self.assertEqual(ro.status_code, 200)
         self.assertEqual(ro.data["code"], "authenticated")
+
+    def test_14_ok_informa_email_sent(self):
+        r = APIClient().post(REG, base(), format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertTrue(r.data["email_sent"])
+
+    def test_15_smtp_falla_no_500_usuario_creado(self):
+        import smtplib
+
+        with mock.patch("accounts.services.send_mail", side_effect=smtplib.SMTPException("relay off")):
+            r = APIClient().post(REG, base(), format="json")
+        self.assertEqual(r.status_code, 201)  # nunca 500 por SMTP
+        self.assertEqual(r.data["code"], "registered")
+        self.assertFalse(r.data["email_sent"])
+        u = User.objects.get(email="juan@test.com")  # creado y pendiente
+        self.assertFalse(u.email_verified)
+        self.assertTrue(u.check_password(PW))
+
+    def test_16_smtp_timeout_no_bloquea(self):
+        import socket
+
+        with mock.patch("accounts.services.send_mail", side_effect=socket.timeout("colgado")):
+            r = APIClient().post(REG, base(), format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertFalse(r.data["email_sent"])
+        self.assertFalse(User.objects.get(email="juan@test.com").email_verified)

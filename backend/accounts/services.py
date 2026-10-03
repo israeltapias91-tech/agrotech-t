@@ -17,6 +17,7 @@ from django.utils.http import base36_to_int, urlsafe_base64_decode, urlsafe_base
 
 import datetime
 import secrets
+from smtplib import SMTPException
 
 from .tokens import (
     BadSignature,
@@ -452,7 +453,16 @@ def register_user(first_name="", last_name="", email="", phone="",
         raise err from exc
     user.set_password(password)  # hash, nunca plano
     user.save()
-    token, link = request_verification(user)  # única fuente de verdad
+    try:
+        token, link = request_verification(user)  # única fuente de verdad
+    except (SMTPException, OSError) as exc:
+        # El usuario YA quedó creado (save previo). Si el SMTP falla o se
+        # agota el timeout, no se devuelve 500: la cuenta queda pendiente
+        # de verificación y el correo puede reenviarse (email/resend/).
+        from .security import audit
+
+        audit("auth.email.send_fail", user_id=str(user.pk), reason=type(exc).__name__)
+        token, link = None, None
     from .security import audit
 
     audit("auth.registered", user_id=str(user.pk), email=user.email)

@@ -340,7 +340,7 @@ class RegisterView(APIView):
 
     def post(self, request):
         try:
-            user, _, _ = services.register_user(
+            user, token, _ = services.register_user(
                 first_name=request.data.get("first_name", ""),
                 last_name=request.data.get("last_name", ""),
                 email=request.data.get("email", ""),
@@ -350,5 +350,12 @@ class RegisterView(APIView):
             )
         except (RegistrationError, EmailVerificationError, PasswordResetError) as exc:
             return _error(exc, status.HTTP_400_BAD_REQUEST)
-        body = {"code": "registered", "detail": "Cuenta creada, verifica tu correo", "email": user.email}
+        body = {
+            "code": "registered",
+            "detail": "Cuenta creada, verifica tu correo",
+            "email": user.email,
+            # False si el SMTP falló: la cuenta existe (sin verificar) y el
+            # correo puede reenviarse con email/resend/. Nunca 500 por SMTP.
+            "email_sent": token is not None,
+        }
         return Response(body, status=status.HTTP_201_CREATED)

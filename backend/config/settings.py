@@ -176,6 +176,9 @@ EMAIL_BACKEND = os.getenv(
 )
 EMAIL_HOST = os.getenv("EMAIL_HOST", "localhost")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "1025"))
+# Timeout SMTP (segundos): evita que send_mail() bloquee el request si el
+# servidor no responde. Sin esto el socket queda bloqueado y el cliente corta (499).
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT_SECONDS", "10"))
 EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", False)
 # FASE 5 email-real (opción B): SSL implícito para puerto 465.
 # Mutuamente excluyente con TLS: usa uno u otro, nunca ambos.
