@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+/* AgroTech-T — identidad visual (FASE 2, solo visual).
+   Verde oscuro + tonos tierra. Nada brillante, nada negro puro. */
+
+@theme {
+  --font-sans: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+
+  --color-forest-50: #f0f7f2;
+  --color-forest-100: #dcefe3;
+  --color-forest-200: #b7dfc6;
+  --color-forest-500: #3e9a68;
+  --color-forest-600: #2f7d54;
+  --color-forest-700: #256243;
+  --color-forest-800: #1b4630;
+  --color-forest-900: #123322;
+  --color-forest-950: #0b1f14;
+
+  --color-sand-100: #f5efe2;
+  --color-sand-200: #e7dcc8;
+  --color-sand-500: #a98a5b;
+  --color-sand-900: #3b2f23;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-forest-950);
+  color: #1a2420;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Focus visible consistente (accesibilidad). */
+:where(a, button, input):focus-visible {
+  outline: 2px solid var(--color-forest-500);
+  outline-offset: 2px;
+}
