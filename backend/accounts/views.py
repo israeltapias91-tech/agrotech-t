@@ -2,6 +2,7 @@
 
 from django.contrib.auth import login as django_login
 from django.contrib.auth import logout as django_logout
+from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import status
@@ -268,12 +269,21 @@ class SessionView(APIView):
 
 @method_decorator(ensure_csrf_cookie, name="dispatch")
 class CsrfView(APIView):
-    """Setea csrftoken para React (GET previo al login)."""
+    """Setea csrftoken para React (GET previo al login).
+
+    SPA cross-site (Netlify -> Render): la cookie pertenece al dominio del
+    backend y JS no puede leerla via document.cookie, asi que el token se
+    expone tambien en el JSON (solo al origen CORS permitido, por HTTPS).
+    El frontend lo guarda en memoria y lo envia como X-CSRFToken.
+    """
 
     permission_classes = [AllowAny]
 
     def get(self, request):
-        return Response({"code": "csrf_set", "detail": "CSRF cookie lista"}, status=status.HTTP_200_OK)
+        return Response(
+            {"code": "csrf_set", "detail": "CSRF cookie lista", "csrfToken": get_token(request)},
+            status=status.HTTP_200_OK,
+        )
 
 
 class LogoutAllView(APIView):
