@@ -1,15 +1,19 @@
 /* Servicios de autenticación. Contratos exactos del backend (FASE 0).
    Sin contraseñas ni OTP en storage: todo vive en memoria + cookie Django. */
 
-import { apiFetch } from './client'
+import { apiFetch, setCsrfToken } from './client'
 
 export type OtpRequired = { code: 'otp_required'; detail: string; challenge_id: string }
 export type Authenticated = { code: 'authenticated'; detail: string; email: string; account_status: string }
 export type SessionInfo = { authenticated: true; email: string; account_status: string; email_verified: boolean }
 
 export const authApi = {
-  csrf(): Promise<{ code: string }> {
-    return apiFetch('/api/auth/csrf/')
+  async csrf(): Promise<{ code: string; csrfToken?: string }> {
+    const data = await apiFetch<{ code: string; csrfToken?: string }>('/api/auth/csrf/')
+    if (typeof data.csrfToken === 'string' && data.csrfToken.length > 0) {
+      setCsrfToken(data.csrfToken)
+    }
+    return data
   },
 
   register(data: {

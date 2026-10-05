@@ -18,7 +18,18 @@ export class ApiError extends Error {
   }
 }
 
+/* Token CSRF en memoria (nunca storage): lo provee GET /api/auth/csrf/.
+   Necesario cross-site (Netlify -> Render), donde document.cookie no ve
+   la cookie del dominio del backend. */
+let memoryCsrfToken: string | null = null
+
+export function setCsrfToken(token: string | null): void {
+  memoryCsrfToken = token
+}
+
 export function getCsrfToken(): string | null {
+  if (memoryCsrfToken) return memoryCsrfToken
+  // Fallback desarrollo local (mismo sitio): leer la cookie.
   const m = document.cookie.match(/(?:^|; )csrftoken=([^;]*)/)
   return m ? decodeURIComponent(m[1]) : null
 }
