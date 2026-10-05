@@ -169,7 +169,17 @@ REST_FRAMEWORK = {
 GRACE_PERIOD_DAYS = os.getenv("GRACE_PERIOD_DAYS", "")
 TRIAL_DAYS = int(os.getenv("TRIAL_DAYS", "14"))
 
+# --- Correo transaccional HTTP (FASE AUTH EMAIL API, sin SMTP en prod) ---
+# Proveedor: Resend vía API HTTP (urllib, sin SDK). Credenciales solo por env.
+# FRONTEND_URL ya existe abajo y se reutiliza para construir links.
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", os.getenv("DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>"))
+RESEND_API_URL = os.getenv("RESEND_API_URL", "https://api.resend.com/emails")
+EMAIL_API_TIMEOUT_SECONDS = int(os.getenv("EMAIL_API_TIMEOUT_SECONDS", "10"))
+
 # --- Email + verificación (feature/auth-email-verification, sin JWT) ---
+# DEPRECATED SMTP (rollback): variables conservadas inactivas para poder
+# revertir. El path de producción usa email_backend.py (Resend HTTP).
 EMAIL_BACKEND = os.getenv(
     "EMAIL_BACKEND",
     "django.core.mail.backends.console.EmailBackend" if DEBUG else "django.core.mail.backends.smtp.EmailBackend",

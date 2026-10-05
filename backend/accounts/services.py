@@ -10,15 +10,14 @@ from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.mail import send_mail
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import base36_to_int, urlsafe_base64_decode, urlsafe_base64_encode
 
 import datetime
 import secrets
-from smtplib import SMTPException
 
+from . import email_backend
 from .tokens import (
     BadSignature,
     SignatureExpired,
@@ -111,21 +110,10 @@ def build_verification_link(token: str) -> str:
 
 
 def send_verification_email(user, token: str) -> str:
-    """Envía el correo. Devuelve el link (útil en dev/tests)."""
+    """Envía el correo vía API transaccional. Devuelve el link (útil en dev/tests)."""
     link = build_verification_link(token)
-    subject = "AGROTECH — verifica tu correo"
-    body = (
-        f"Hola,\n\nConfirma tu correo pulsando este enlace "
-        f"(válido {int(getattr(settings, 'EMAIL_VERIFICATION_TIMEOUT_SECONDS', 86400)) // 3600} h):\n{link}\n\n"
-        "Si no creaste esta cuenta, ignora este mensaje."
-    )
-    send_mail(
-        subject,
-        body,
-        getattr(settings, "DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>"),
-        [user.email],
-        fail_silently=False,
-    )
+    hours = int(getattr(settings, "EMAIL_VERIFICATION_TIMEOUT_SECONDS", 86400)) // 3600
+    email_backend.send_verification(user.email, link, hours)
     return link
 
 
@@ -346,15 +334,15 @@ def request_password_reset(email: str):
     uid = _uid(user)
     token = default_token_generator.make_token(user)
     link = build_password_reset_link(uid, token)
-    send_mail(
-        "AGROTECH — recupera tu contraseña",
-        f"Hola,\n\nRestablece tu contraseña aquí (válido "
-        f"{int(getattr(settings, 'PASSWORD_RESET_TIMEOUT', 86400)) // 3600} h):\n{link}\n\n"
-        "Si no lo pediste, ignora este mensaje.",
-        getattr(settings, "DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>"),
-        [user.email],
-        fail_silently=False,
-    )
+    try:
+        hours = int(getattr(settings, "PASSWORD_RESET_TIMEOUT", 86400)) // 3600
+        email_backend.send_password_reset(user.email, link, hours)
+    except email_backend.EmailSendError as exc:
+        # Neutro: no revelar existencia; la vista responde 200 igual.
+        # Se conserva el tuple para no romper el flujo de confirmación en tests.
+        from .security import audit
+
+        audit("auth.email.send_fail", user_id=str(user.pk), reason=type(exc).__name__)
     return user, uid, token, link
 
 
@@ -455,8 +443,8 @@ def register_user(first_name="", last_name="", email="", phone="",
     user.save()
     try:
         token, link = request_verification(user)  # única fuente de verdad
-    except (SMTPException, OSError) as exc:
-        # El usuario YA quedó creado (save previo). Si el SMTP falla o se
+    except (email_backend.EmailSendError, OSError, TimeoutError) as exc:
+        # El usuario YA quedó creado (save previo). Si el proveedor falla o se
         # agota el timeout, no se devuelve 500: la cuenta queda pendiente
         # de verificación y el correo puede reenviarse (email/resend/).
         from .security import audit
@@ -528,24 +516,20 @@ def _new_code(length: int) -> str:
 
 
 def _send_otp_mail(user, code: str, minutes: int) -> None:
-    send_mail(
-        "AGROTECH — tu código de inicio de sesión",
-        f"Hola,\n\nTu código para iniciar sesión es:\n\n{code}\n\n"
-        f"Vence en {minutes} minutos. Si no intentaste entrar, ignora este mensaje.",
-        getattr(settings, "DEFAULT_FROM_EMAIL", "AGROTECH <no-reply@agrotech.local>"),
-        [user.email],
-        fail_silently=False,
-    )
+    email_backend.send_login_otp(user.email, code, minutes)
 
 
 def issue_login_otp(user):
-    """Crea un desafío OTP tras contraseña válida. Invalida el anterior."""
+    """Crea un desafío OTP tras contraseña válida. Invalida el anterior.
+
+    Consistencia ante fallo de envío (condición FASE AUTH EMAIL API §15):
+    el OTP anterior solo se invalida DESPUÉS de un envío exitoso. Si el
+    envío del nuevo falla, el nuevo se elimina y el anterior sigue usable,
+    evitando dejar al usuario sin ningún desafío válido.
+    """
     OTP = _otp_model()
     _cleanup_otps(user)
     now = timezone.now()
-    OTP.objects.filter(user=user, used_at__isnull=True, superseded_at__isnull=True).update(
-        superseded_at=now
-    )
     length = _otp_cfg("OTP_LENGTH", 6)
     minutes = _otp_cfg("OTP_TIMEOUT_SECONDS", 600) // 60
     otp = OTP.objects.create(
@@ -554,7 +538,14 @@ def issue_login_otp(user):
         expires_at=now + datetime.timedelta(seconds=_otp_cfg("OTP_TIMEOUT_SECONDS", 600)),
         max_attempts=_otp_cfg("OTP_MAX_ATTEMPTS", 5),
     )
-    _send_otp_mail(user, _code, minutes)  # plano solo aquí, nunca en DB/logs
+    try:
+        _send_otp_mail(user, _code, minutes)  # plano solo aquí, nunca en DB/logs
+    except email_backend.EmailSendError:
+        otp.delete()  # rollback: sin correo no hay desafío válido; anterior intacto
+        raise
+    OTP.objects.filter(user=user, used_at__isnull=True, superseded_at__isnull=True).exclude(
+        pk=otp.pk
+    ).update(superseded_at=now)
     from .security import audit
 
     audit("auth.otp.issued", user_id=str(user.pk))

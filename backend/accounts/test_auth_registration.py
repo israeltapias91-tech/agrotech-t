@@ -135,11 +135,13 @@ class RegistrationTests(TestCase):
         self.assertTrue(r.data["email_sent"])
 
     def test_15_smtp_falla_no_500_usuario_creado(self):
-        import smtplib
+        from .email_backend import EmailSendError
 
-        with mock.patch("accounts.services.send_mail", side_effect=smtplib.SMTPException("relay off")):
+        with mock.patch(
+            "accounts.email_backend._post", side_effect=EmailSendError("relay off")
+        ):
             r = APIClient().post(REG, base(), format="json")
-        self.assertEqual(r.status_code, 201)  # nunca 500 por SMTP
+        self.assertEqual(r.status_code, 201)  # nunca 500 por fallo de correo
         self.assertEqual(r.data["code"], "registered")
         self.assertFalse(r.data["email_sent"])
         u = User.objects.get(email="juan@test.com")  # creado y pendiente
@@ -147,9 +149,11 @@ class RegistrationTests(TestCase):
         self.assertTrue(u.check_password(PW))
 
     def test_16_smtp_timeout_no_bloquea(self):
-        import socket
+        from .email_backend import EmailSendError
 
-        with mock.patch("accounts.services.send_mail", side_effect=socket.timeout("colgado")):
+        with mock.patch(
+            "accounts.email_backend._post", side_effect=EmailSendError("timeout")
+        ):
             r = APIClient().post(REG, base(), format="json")
         self.assertEqual(r.status_code, 201)
         self.assertFalse(r.data["email_sent"])
