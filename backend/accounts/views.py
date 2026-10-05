@@ -11,6 +11,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from . import services
+from .email_backend import EmailSendError
 from .services import EmailVerificationError, LoginError, PasswordResetError, RegistrationError
 
 
@@ -140,7 +141,17 @@ class LoginView(APIView):
             )
         backoff_clear(norm.lower(), "LOGIN")
         audit("auth.login.ok", user_id=str(user.pk), email=user.email)
-        otp = services.issue_login_otp(user)  # sin django_login() aquí
+        try:
+            otp = services.issue_login_otp(user)  # sin django_login() aquí
+        except EmailSendError:
+            # Controlado (no 500): sin sesión, sin OTP en respuesta.
+            return Response(
+                {
+                    "code": "email_send_failed",
+                    "detail": "No pudimos enviar el código, intenta de nuevo",
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         return Response(
             {
                 "code": "otp_required",
@@ -205,6 +216,14 @@ class OtpResendView(APIView):
             )
         try:
             otp = services.resend_login_otp(challenge_id)
+        except EmailSendError:
+            return Response(
+                {
+                    "code": "email_send_failed",
+                    "detail": "No pudimos reenviar el código, intenta de nuevo",
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
         except services.OTPError as exc:
             return _error(exc, status.HTTP_400_BAD_REQUEST)
         return Response(
