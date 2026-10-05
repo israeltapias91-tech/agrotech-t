@@ -6,8 +6,13 @@ set -e
 DB_HOST="${DB_HOST:-db}"
 DB_PORT="${DB_PORT:-3306}"
 
-echo "Esperando MariaDB en ${DB_HOST}:${DB_PORT}..."
-python - <<'PY'
+# Render: SKIP_DB_WAIT=1 salta solo la espera TCP (no hay servicio "db").
+# Local (sin la flag o con otro valor): wait intacto contra DB_HOST/DB_PORT.
+if [ "${SKIP_DB_WAIT:-0}" = "1" ]; then
+    echo "SKIP_DB_WAIT=1: omitiendo espera TCP de MariaDB."
+else
+    echo "Esperando MariaDB en ${DB_HOST}:${DB_PORT}..."
+    python - <<'PY'
 import os, socket, sys, time
 host = os.getenv("DB_HOST", "db")
 port = int(os.getenv("DB_PORT", "3306"))
@@ -21,6 +26,7 @@ for _ in range(60):
 print("MariaDB no disponible tras 120s.", file=sys.stderr)
 sys.exit(1)
 PY
+fi
 
 echo "Aplicando migraciones..."
 python manage.py migrate --noinput
