@@ -77,6 +77,16 @@ WSGI_APPLICATION = "config.wsgi.application"
 # --- Base de datos: MariaDB 11.8 vía mysqlclient ---
 # NOTA Windows: el puerto 3306 está ocupado por MySQL80 local.
 # MariaDB 11.8 MSI debe instalarse en 3307 (ver docs/FASE3-mariadb.md).
+# TLS (Layerbase/prod): DB_SSL_MODE=REQUIRED activa ssl_mode en OPTIONS.
+# Vacío/ausente = sin SSL (local/dev intacto). Sin hardcodear hosts ni
+# credenciales: todo sigue viniendo de DB_HOST/PORT/NAME/USER/PASSWORD.
+_DB_OPTIONS = {
+    "charset": "utf8mb4",
+    "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
+}
+DB_SSL_MODE = os.getenv("DB_SSL_MODE", "").strip().upper()
+if DB_SSL_MODE:
+    _DB_OPTIONS["ssl_mode"] = DB_SSL_MODE
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.mysql",
@@ -85,10 +95,7 @@ DATABASES = {
         "PASSWORD": os.getenv("DB_PASSWORD", "agrotech-dev"),
         "HOST": os.getenv("DB_HOST", "127.0.0.1"),
         "PORT": os.getenv("DB_PORT", "3307"),
-        "OPTIONS": {
-            "charset": "utf8mb4",
-            "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
-        },
+        "OPTIONS": _DB_OPTIONS,
     }
 }
 
